@@ -1,5 +1,5 @@
 # DESCtorch
-Deep Embedded Single-cell RNA-seq Clustering implementation with pytorch
+Deep Embedded Single-cell RNA-seq Clustering implementation with pytorch,  you can find implementation of tensorflow version of DESC in https://github.com/eleozzr/desc.  We will try more complicated network structure and loss function base on DESCtorch in the future!!! 
 
 ## Installtion
 
@@ -9,5 +9,11 @@ conda activate DESCtorch
 pip install DESCtorch
 ```
 
-run tutorial.ipynb for more detail
+run paul15_tutorial.ipynb for more detail
+
+# Reference
+
+Li, X., Wang, K., Lyu, Y., Pan, H., Zhang, J., Stambolian, D., ... & Li, M. (2020). Deep learning enables accurate clustering with batch effect removal in single-cell RNA-seq analysis. *Nature communications*, *11*(1), 1-14.
+
+
 
