@@ -21,7 +21,7 @@ from anndata import AnnData
 import scanpy as sc
 from scipy.sparse import issparse
 
-from network import *
+from .network import *
 #or 
 import torch
 import random

@@ -21,9 +21,9 @@ import scanpy as sc
 import pandas as pd
 from natsort import natsorted #call natsorted
 import os
-from pytorchtools import EarlyStopping
-from sdae import StackedDenoisingAutoEncoder  # this is for installing package
-from dae import DenoisingAutoencoder
+from .pytorchtools import EarlyStopping
+from .sdae import StackedDenoisingAutoEncoder  # this is for installing package
+from .dae import DenoisingAutoencoder
 import torch.nn as nn
 from tqdm import tqdm
 import torch
@@ -34,7 +34,7 @@ from torch.utils.data import TensorDataset
 import torch.optim as optim
 from torch.optim import SGD
 import torch.nn.functional as F
-from dec import DEC,target_distribution
+from .dec import DEC,target_distribution
 
 class DescModel(object):
     def __init__(self,

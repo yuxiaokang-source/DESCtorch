@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from cluster import ClusterAssignment
+from .cluster import ClusterAssignment
 
 def target_distribution(batch: torch.Tensor) -> torch.Tensor:
     """
