@@ -1,9 +1,7 @@
 ### yu xiaokang 2022-04-01 pytorch 
-
 from __future__ import division
 from __future__ import print_function
 import os,math
-os.environ['PYTHONHASHSEED'] = '0'
 import matplotlib
 havedisplay = "DISPLAY" in os.environ
 #if we have a display use a plotting backend
@@ -12,56 +10,25 @@ if havedisplay:
 else:
     matplotlib.use('Agg')
 from time import time as get_time
-import random
 import numpy as np
 import pandas as pd
-#import tensorflow as tf
 import multiprocessing
 from anndata import AnnData
 import scanpy as sc
 from scipy.sparse import issparse
 
-from .network import *
-#or 
+try:
+    from .network import *
+except:
+    from network import *
+
+try:
+    from .utils import seed_torch,getdims
+except:
+    from utils import seed_torch,getdims
+
 import torch
-import random
 from torch.utils.data import DataLoader
-
-######################## set device and random seed ###########################
-def seed_torch(seed=42):
-    random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
-    torch.backends.cudnn.badatahmark = False
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.enabled = False
-###############################################################################
-
-
-
-def getdims(x=(10000,200)):
-    """
-    This function will give the suggested nodes for each encoder layer
-    return the dims for network
-    """
-    assert len(x)==2
-    n_sample=x[0]
-    if n_sample>20000:# may be need complex network
-        dims=[x[-1],128,32]
-    elif n_sample>10000:#10000
-        dims=[x[-1],64,32]
-    elif n_sample>5000: #5000
-        dims=[x[-1],32,16] #16
-    elif n_sample>2000:
-        dims=[x[-1],128]
-    elif n_sample>500:
-        dims=[x[-1],64]
-    else:
-        dims=[x[-1],16]
-    return dims
 
 
 def train_single(data,dims=None,
@@ -78,7 +45,7 @@ def train_single(data,dims=None,
         is_stacked=True,
         use_earlyStop=True,
         use_ae_weights=False,
-	save_encoder_weights=False,
+	    save_encoder_weights=False,
         save_encoder_step=4,
         save_dir='result_tmp',
         max_iter=1000,
@@ -88,13 +55,13 @@ def train_single(data,dims=None,
         GPU_id=None,
         random_seed=201809,
         verbose=True,
-	do_tsne=False,
-	learning_rate=150,
-	perplexity=30,
+	    do_tsne=False,
+	    learning_rate=150,
+	    perplexity=30,
         do_umap=False,
-        kernel_clustering="t"
+        kernel_clustering="t",
+        debug=False,
 ):
-    #print("running train_single fucntion ...")
     if isinstance(data,AnnData):
         adata=data
     else:
@@ -102,26 +69,23 @@ def train_single(data,dims=None,
     #make sure dims 
     if dims is None:
         dims=getdims(adata.shape)
-    #print("dims[0]={},adata.shape[-1]={}".format(dims[0],adata.shape[-1])) ,当resolution为多个时，会出问题
     assert dims[0]==adata.shape[-1],'the number of columns of x doesnot equal to the first element of dims, we must make sure that dims[0]==x.shape[0]'
     
     seed_torch(random_seed)
-    total_cpu=multiprocessing.cpu_count()
-    print('The number of cpu in your computer is',total_cpu)
+    #total_cpu=multiprocessing.cpu_count()
+    #print('The number of cpu in your computer is',total_cpu)
 
     if use_GPU and torch.cuda.is_available():
         #if you use GPU,you must be sure that there is GPU in your device
+        print("use GPU to train DESC.........")
         if(GPU_id is not None):
             device=torch.device("cuda"+str(GPU_id))
         else:
             device=torch.device("cuda")
     else:
+        print("use CPU to train DESC.........")
         device=torch.device("cpu")
-    
-    #################################################################
-    if not use_ae_weights and os.path.isfile(os.path.join(save_dir,"autoencoder_model.pkl")):
-        os.remove(os.path.join(save_dir,"autoencoder_model.pkl"))
-  
+      
     tic=get_time()#recored time         
     desc=DescModel(dims=dims,
               x=adata.X,
@@ -139,12 +103,13 @@ def train_single(data,dims=None,
               is_stacked=is_stacked,
               use_earlyStop=use_earlyStop,
               use_ae_weights=use_ae_weights,
-	      save_encoder_weights=save_encoder_weights,
+	          save_encoder_weights=save_encoder_weights,
               save_encoder_step=save_encoder_step,
               save_dir=save_dir,
               kernel_clustering=kernel_clustering,
               device=device,
-              verbose=verbose
+              verbose=verbose,
+              debug=debug
     )
     ds_train = torch.utils.data.TensorDataset(torch.FloatTensor(adata.X))
     Embeded_z=desc.get_embedding(ds_train,desc.dec_model)
@@ -157,20 +122,14 @@ def train_single(data,dims=None,
     adata.obs['desc_'+str(louvain_resolution)]=y_pred
     adata.obsm['X_Embeded_z'+str(louvain_resolution)]=Embeded_z
     if do_tsne:
-        sc.tl.tsne(adata,use_rep="X_Embeded_z"+str(louvain_resolution),learning_rate=learning_rate,perplexity=perplexity)
+        sc.tl.tsne(adata,use_rep="X_Embeded_z"+str(louvain_resolution),learning_rate=learning_rate,perplexity=perplexity,random_state=0)
         adata.obsm["X_tsne"+str(louvain_resolution)]=adata.obsm["X_tsne"].copy()
         print('tsne finished and added X_tsne'+str(louvain_resolution),' into the umap coordinates (adata.obsm)\n')
-        #sc.logging.msg(' tsne finished', t=True, end=' ', v=4)
-        #sc.logging.msg('and added\n'
-        #         '    \'X_tsne\''+str(louvain_resolution),'the tsne coordinates (adata.obs)\n', v=4)
     if do_umap:
         sc.pp.neighbors(adata,n_neighbors=n_neighbors,use_rep="X_Embeded_z"+str(louvain_resolution))
         sc.tl.umap(adata)
         adata.obsm["X_umap"+str(louvain_resolution)]=adata.obsm["X_umap"].copy()
         print('umap finished and added X_umap'+str(louvain_resolution),' into the umap coordinates (adata.obsm)\n')
-        #sc.logging.msg(' umap finished', t=True, end=' ', v=4)
-        #sc.logging.msg('and added\n'
-        #        '    \'X_umap\''+str(louvain_resolution),'the umap coordinates (adata.obsm)\n', v=4)
         del adata.uns["neighbors"]
 
     #prob_matrix
@@ -192,7 +151,7 @@ def train(data,dims=None,
         is_stacked=True,
         use_earlyStop=True,
         use_ae_weights=True,
-	save_encoder_weights=False,
+	    save_encoder_weights=False,
         save_encoder_step=5,
         save_dir='result_tmp',
         max_iter=1000,
@@ -202,16 +161,16 @@ def train(data,dims=None,
         use_GPU=False,
         GPU_id=None,
         verbose=True,
-	do_tsne=False,
-	learning_rate=150,
-	perplexity=30,
+	    do_tsne=False,
+	    learning_rate=150,
+	    perplexity=30,
         do_umap=False,
-        kernel_clustering="t"
+        kernel_clustering="t",
+        debug=False
 ): 
     """ Deep Embeded single cell clustering(DESC) API
     Conduct clustering for single cell data given in the anndata object or np.ndarray,sp.sparmatrix,or pandas.DataFrame
       
-    
     Argument:
     ------------------------------------------------------------------
     data: :class:`~anndata.AnnData`, `np.ndarray`, `sp.spmatrix`,`pandas.DataFrame`
@@ -262,7 +221,7 @@ def train(data,dims=None,
     do_umap, `bool`, optional. Default, `False`,Whethter do umap for representation or not
     ------------------------------------------------------------------
     """
-    print("===============runnning desc.train function...............")
+    #print("===============runnning desc.train function...............")
     if isinstance(data,AnnData):
         adata=data
     elif isinstance(data,pd.DataFrame):
@@ -284,7 +243,7 @@ def train(data,dims=None,
     time_start=get_time()
     for ith,resolution in enumerate(louvain_resolution):
         print("Start to process resolution=",str(resolution))
-        use_ae_weights=use_ae_weights if ith==0 else True
+        use_ae_weights=use_ae_weights if ith==0 else True  ## attention!!!
         res=train_single(data=data,
             dims=dims,
             alpha=alpha,
@@ -301,7 +260,7 @@ def train(data,dims=None,
             is_stacked=is_stacked,
             use_earlyStop=use_earlyStop,
             use_ae_weights=use_ae_weights,
-	    save_encoder_weights=save_encoder_weights,
+	        save_encoder_weights=save_encoder_weights,
             save_encoder_step=save_encoder_step,
             save_dir=save_dir,
             max_iter=max_iter,
@@ -309,11 +268,12 @@ def train(data,dims=None,
             use_GPU=use_GPU,
             GPU_id=GPU_id,
             verbose=verbose,
-	    do_tsne=do_tsne,
-	    learning_rate=learning_rate,
-	    perplexity=perplexity,
+	        do_tsne=do_tsne,
+	        learning_rate=learning_rate,
+	        perplexity=perplexity,
             do_umap=do_umap,
-            kernel_clustering=kernel_clustering)
+            kernel_clustering=kernel_clustering,
+            debug=debug)
         #update adata
         data=res
     print("The run time for all resolution is:",get_time()-time_start)

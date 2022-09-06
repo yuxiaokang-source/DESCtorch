@@ -35,6 +35,7 @@ import torch.optim as optim
 from torch.optim import SGD
 import torch.nn.functional as F
 from .dec import DEC,target_distribution
+from .utils import seed_torch
 
 class DescModel(object):
     def __init__(self,
@@ -59,13 +60,17 @@ class DescModel(object):
                  save_dir="result_tmp",
                  kernel_clustering="t",
                  device=torch.device("cpu"),
-                 verbose=True
+                 verbose=True,
+                 debug=False
                  # save result to save_dir, the default is "result_tmp". if recurvie path, the root dir must be exists, or there will be something wrong: for example : "/result_singlecell/dataset1" will return wrong if "result_singlecell" not exist
                  ):
 
         if not os.path.exists(save_dir):
             print("Create the directory:"+str(save_dir)+" to save result")
             os.mkdir(save_dir)
+        self.debug=debug
+        if(self.debug):
+            print("debug code in debug mode.....")
         self.dims = dims
         self.x=x #feature n*p, n:number of cells, p: number of genes
         self.alpha = alpha
@@ -89,42 +94,43 @@ class DescModel(object):
         self.save_encoder_step=save_encoder_step
         self.save_dir=save_dir
         self.kernel_clustering=kernel_clustering
-
         self.autoencoder=StackedDenoisingAutoEncoder(
         self.dims, activation=activation,final_activation=actincenter,gain=1.0,
     ) 
-        ################## print model ###########
-        if(verbose):
-            print("constructing DESC model")
-            print(self.autoencoder)
-        ##########################################
+        print("=====================================DESC Model network===========================================")
+        print("==================================================================================================")
+        print(self.autoencoder)
+        print("==================================================================================================")
+        print("==================================================================================================")
         
+        # create dataset
         ds_train = torch.utils.data.TensorDataset(torch.FloatTensor(self.x))
-        t0 = get_time()
-        self.pretrain(ds_train,epochs=self.pretrain_epochs/2,batch_size=self.batch_size,corruption=self.drop_rate_SAE,device=device,verbose=verbose)
-        self.finetune_autoencoder(ds_train,epochs=self.pretrain_epochs,batch_size=self.batch_size,corruption=None,device=device,verbose=verbose) 
-        print('Pretraining time is', get_time() - t0)
-        #save ae results into disk
-        #save autoencoder model
-        torch.save(self.autoencoder,os.path.join(self.save_dir,"autoencoder_model.pkl"))
 
-        dataloader = DataLoader(
-            ds_train, batch_size=self.batch_size, pin_memory=False, shuffle=False
-        )
-        data_iterator = tqdm(dataloader, leave=False, unit="batch")
-        features = []
-        if isinstance(self.autoencoder.encoder, torch.nn.Module):
-            self.autoencoder.encoder.eval()
-        for batch in data_iterator:
-            if isinstance(batch, tuple) or isinstance(batch, list) and len(batch) in [1, 2]:
-                batch = batch[0]
-            batch = batch.squeeze(1).view(batch.size(0), -1)
-            batch = batch.to(device)
-            output = self.autoencoder.encoder(batch)
-            features.append(
-                output.detach().cpu()
-            )  # move to the CPU to prevent out of memory on the GPU
-        features=torch.cat(features).cpu().numpy()
+        if self.use_ae_weights: 
+            print("Checking whether %s  exists in the directory"%str(os.path.join(self.save_dir,'ae_weights.pth')))
+            if not os.path.isfile(self.save_dir+"/ae_weights.pth"):
+                print("The file ae_weights.pth is not exits,the program will rerun autoencoder")
+                t0 = get_time()
+                self.pretrain(ds_train,epochs=self.pretrain_epochs/2,batch_size=self.batch_size,corruption=self.drop_rate_SAE,device=device,verbose=verbose)
+                self.finetune_autoencoder(ds_train,epochs=self.pretrain_epochs,batch_size=self.batch_size,corruption=None,device=device,verbose=verbose) 
+                print('Pretraining time is', get_time() - t0)
+                #### save weight to file
+                torch.save(self.autoencoder.state_dict(),os.path.join(self.save_dir,"ae_weights.pth"))
+                print('Pretrained weights are saved to %s/ae_weights.pth' % self.save_dir)
+            else:
+                print("Find pretrained weights....,loading pretrained weights....")
+                self.autoencoder.load_state_dict(torch.load(os.path.join(self.save_dir,"ae_weights.pth")))
+        else:
+            print("use_ae_weights=False, the program will rerun autoencoder")
+            t0 = get_time()
+            self.pretrain(ds_train,epochs=self.pretrain_epochs/2,batch_size=self.batch_size,corruption=self.drop_rate_SAE,device=device,verbose=verbose)
+            self.finetune_autoencoder(ds_train,epochs=self.pretrain_epochs,batch_size=self.batch_size,corruption=None,device=device,verbose=verbose) 
+            print('Pretraining time is', get_time() - t0)
+            torch.save(self.autoencoder.state_dict(),os.path.join(self.save_dir,"ae_weights.pth"))
+            print('Pretrained weights are saved to %s/ae_weights.pth' % self.save_dir)
+ 
+        # exact features function can not only exact autoencoder embedding，but also subautoencoder embedding
+        features=self.exact_features(dataset=ds_train,model=self.autoencoder).cpu().numpy()# 
 
         print("...number of clusters is unknown, Initialize cluster centroid using louvain method")
         # can be replaced by other clustering methods
@@ -136,8 +142,10 @@ class DescModel(object):
         sc.pp.neighbors(adata0, n_neighbors=self.n_neighbors, use_rep="X")
         sc.tl.louvain(adata0, resolution=self.resolution)
         sc.tl.umap(adata0)
-        if(verbose):
-            sc.pl.umap(adata0, color=["louvain"], save="_init_louvain_" + str(self.resolution) + ".png")
+        if(self.debug):
+            sc.pl.umap(adata0, color=["louvain"], show=False)
+            plt.savefig(self.save_dir+"/init_pretrain_louvain_" + str(self.resolution) + ".png")
+            adata0.write(self.save_dir+"/init_pretrain_{}.h5ad".format(self.resolution))
 
         Y_pred_init = adata0.obs['louvain']
         init_pred = np.asarray(Y_pred_init, dtype=int)
@@ -146,16 +154,23 @@ class DescModel(object):
         # print(np.unique(self.init_pred))
             exit("Error: There is only a cluster detected. The resolution:"+str(self.resolution)+"is too small, please choose a larger resolution!!")
         features = pd.DataFrame(adata0.X, index=np.arange(0, adata0.shape[0]))
+        #features.to_csv(self.save_dir+"/features.csv")
         Group = pd.Series(init_pred, index=np.arange(0, adata0.shape[0]), name="Group")
         Mergefeature = pd.concat([features, Group], axis=1)
         cluster_centers = np.asarray(Mergefeature.groupby("Group").mean())
         n_clusters = cluster_centers.shape[0]
         init_centroid = [cluster_centers]
         predicted = init_pred.copy()
-
+        
+        #seed_torch(42) # manual seed for dataloader
+        torch.manual_seed("42") # reproduce result for multi-resolution compared with single resolution
         self.dec_model = DEC(cluster_number=n_clusters, hidden_dimension=self.dims[-1], encoder=self.autoencoder.encoder)
         self.dec_train(dataset=ds_train,init_pred=predicted,cluster_centers=cluster_centers,epochs=1000,epochs_fit=self.epochs_fit,batch_size=self.batch_size,stopping_delta=self.tol,device=device,verbose=verbose)
-
+        
+        # save weight of DEC model
+        torch.save(self.dec_model.state_dict(),os.path.join(self.save_dir,'dec_weight.pth'))
+        print('DEC training weights are saved to %s/dec_weights.pth' % self.save_dir)
+        
     def pretrain(self,
             dataset,
             epochs: int,
@@ -422,7 +437,7 @@ class DescModel(object):
         :param epoch_callback: optional function of epoch and model, default None
         :return: None
         """
-        print("dec training......")
+        print("DEC training......,epochs_fit={}".format(epochs_fit))
         predicted=init_pred.copy()
         self.dec_model=self.dec_model.to(device)
         self.dec_model.train()
@@ -458,9 +473,9 @@ class DescModel(object):
             self.dec_model=self.dec_model.to(device)
             self.dec_model.train()
             
-            print("training with epochs_fit......")
+            print("DEC training:epoch={}......".format(epoch))
             for i in range(epochs_fit):
-                print("epoch_fit={}".format(i+1))
+                #print("epoch_fit={}".format(i+1))
                 for index,(input,p_prob) in enumerate(dataloader):
                     p_prob=p_prob.to(device)
                     output = self.dec_model(input.to(device))
@@ -468,133 +483,6 @@ class DescModel(object):
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step(closure=None)
-
-
-    # def dec_train(
-    #         self,
-    #         init_pred:None,
-    #         cluster_centers:None,
-    #         dataset: torch.utils.data.Dataset,
-    #         epochs: int,
-    #         batch_size: int,
-    #         optimizer: Optional[torch.optim.Optimizer]=None,
-    #         stopping_delta: Optional[float] = None,
-    #         sampler: Optional[torch.utils.data.sampler.Sampler] = None,
-    #         silent: bool = False,
-    #         update_freq: int = 10,
-    #         evaluate_batch_size: int = 1024,
-    #         update_callback: Optional[Callable[[float, float], None]] = None,
-    #         epoch_callback: Optional[Callable[[int, torch.nn.Module], None]] = None,
-    # ) -> None:
-    #     """
-    #     Train the DEC model given a dataset, a model instance and various configuration parameters.
-
-    #     :param dataset: instance of Dataset to use for training
-    #     :param model: instance of DEC model to train
-    #     :param epochs: number of training epochs
-    #     :param batch_size: size of the batch to train with
-    #     :param optimizer: instance of optimizer to use
-    #     :param stopping_delta: label delta as a proportion to use for stopping, None to disable, default None
-    #     :param collate_fn: function to merge a list of samples into mini-batch
-    #     :param cuda: whether to use CUDA, defaults to True
-    #     :param sampler: optional sampler to use in the DataLoader, defaults to None
-    #     :param silent: set to True to prevent printing out summary statistics, defaults to False
-    #     :param update_freq: frequency of batches with which to update counter, None disables, default 10
-    #     :param evaluate_batch_size: batch size for evaluation stage, default 1024
-    #     :param update_callback: optional function of accuracy and loss to update, default None
-    #     :param epoch_callback: optional function of epoch and model, default None
-    #     :return: None
-    #     """
-    #     print("dec training......")
-    #     static_dataloader = DataLoader(
-    #         dataset,
-    #         batch_size=batch_size,
-    #         pin_memory=False,
-    #         shuffle=False,
-    #     )
-    #     train_dataloader = DataLoader(
-    #         dataset,
-    #         batch_size=batch_size,
-    #         shuffle=True,
-    #     )
-    #     data_iterator = tqdm(
-    #         static_dataloader,
-    #         leave=True,
-    #         unit="batch",
-    #         postfix={
-    #             "epo": -1,
-    #             "train_loss": "%.8f" % 0.0,
-    #         }
-    #     )
-
-    #     predicted=init_pred.copy()
-    #     self.dec_model.train()
-
-    #     predicted_previous = torch.tensor(np.copy(predicted), dtype=torch.long)
-
-    #     cluster_centers = torch.tensor(cluster_centers, dtype=torch.float, requires_grad=True)
-
-    #     with torch.no_grad():
-    #         # initialise the cluster centers
-    #         self.dec_model.state_dict()["assignment.cluster_centers"].copy_(cluster_centers)
-    #     loss_function = nn.KLDivLoss(size_average=False)
-    #     optimizer = SGD(self.dec_model.parameters(), lr=0.01, momentum=0.9)
-    #     delta_label = None
-    #     for epoch in range(epochs):
-    #         features = []
-    #         self.dec_model.train()
-    #         for i in range(self.epochs_fit):
-    #             data_iterator = tqdm(
-    #                 train_dataloader,
-    #                 leave=True,
-    #                 unit="batch",
-    #                 postfix={
-    #                     "epo": epoch,
-    #                     "train_loss": "%.8f" % 0.0,
-    #                 },
-    #                 disable=silent,
-    #             )
-    #             for index, batch in enumerate(data_iterator):
-    #                 if (isinstance(batch, tuple) or isinstance(batch, list)) and len(
-    #                         batch
-    #                 ) == 2:
-    #                     batch, _ = batch  # if we have a prediction label, strip it away
-
-    #                 output = self.dec_model(batch[0])
-    #                 target = target_distribution(output).detach()
-    #                 loss = loss_function(output.log(), target) / output.shape[0]
-    #                 data_iterator.set_postfix(
-    #                     epo=epoch,
-    #                     train_loss="%.8f" % float(loss.item()),
-    #                 )
-    #                 optimizer.zero_grad()
-    #                 loss.backward()
-    #                 optimizer.step(closure=None)
-    #                 features.append(self.dec_model.encoder(batch[0]).detach().cpu())
-
-    #         predicted = self.predict(
-    #             dataset,
-    #             self.dec_model,
-    #             batch_size=self.batch_size,
-    #             return_actual=False
-    #         )
-    #         delta_label = (
-    #                 float((predicted != predicted_previous).float().sum().item())
-    #                 / predicted_previous.shape[0]
-    #         )
-    #         print("The value of delta_label of current", str(epoch + 1), "th iteration is", delta_label, ">= tol",
-    #               stopping_delta)
-    #         if stopping_delta is not None and delta_label < stopping_delta:
-    #             print(
-    #                 'Early stopping as label delta "%1.5f" less than "%1.5f".'
-    #                 % (delta_label, stopping_delta)
-    #             )
-    #             break
-    #         predicted_previous = predicted
-    #         data_iterator.set_postfix(
-    #             epo=epoch,
-    #             train_loss="%.8f" % 0.0,
-    #         )
 
     def predict(self,
             dataset: torch.utils.data.Dataset,
@@ -641,7 +529,7 @@ class DescModel(object):
     def exact_features(self,
             dataset: torch.utils.data.Dataset,
             model: torch.nn.Module,
-            batch_size: int,
+            batch_size: int=256,
             encode=True,
             device=torch.device("cpu")
     ) -> torch.Tensor:

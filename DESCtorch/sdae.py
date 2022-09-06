@@ -101,6 +101,9 @@ class StackedDenoisingAutoEncoder(nn.Module):
             )
         return self.encoder[index].linear, self.decoder[-(index + 1)].linear
 
+    def encode(self, batch: torch.Tensor) -> torch.Tensor:
+        return self.encoder(batch)
+
     def forward(self, batch: torch.Tensor) -> torch.Tensor:
         encoded = self.encoder(batch)
         return self.decoder(encoded)
