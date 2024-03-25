@@ -1,6 +1,5 @@
 # DESCtorch
-Deep Embedded Single-cell RNA-seq Clustering implementation with pytorch,  you can find implementation of tensorflow version of DESC in https://github.com/eleozzr/desc.  We will try more complicated network structure and loss function base on DESCtorch in the future!!! I try my best to reproduce result of this paper in https://github.com/yuxiaokang-source/DESC_reproduce.
-
+Deep Embedded Single-cell RNA-seq Clustering implementation with pytorch,  you can find implementation of tensorflow version of DESC in https://github.com/eleozzr/desc.  We will try more complicated network structure and loss function base on DESCtorch in the future!!! I will reproduce all result of this paper in my free time
 ## Installtion
 
 ```
