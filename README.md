@@ -9,8 +9,17 @@ conda create -n DESCtorch python=3.6.10
 conda activate DESCtorch
 pip install DESCtorch
 ```
+then you can run run DESCtorch for datasets(in run_dataset folder).
 
-run paul15_tutorial.ipynb for more detail
+### Figure1_reproduce(workflow)
+I use draw.io to plot the workflow, you can find the source file of draw.io in Figure1_reproduce folder
+
+### Figure2_reproduce
+will be updated in my free time
+
+### ...
+
+
 
 # Reference
 
